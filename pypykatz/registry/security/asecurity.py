@@ -163,9 +163,11 @@ class SECURITY:
 			else:
 				self.dcc_iteration_count = record * 1024
 				
+		if self.lsa_key is None:
+			await self.get_lsa_key()
 		
-		await self.get_lsa_key()
-		await self.get_NKLM_key()
+		if self.NKLM_key is None:
+			await self.get_NKLM_key()
 		
 		for value in values:
 			logger.debug('[SECURITY] DCC Checking value: %s' % value)
@@ -204,15 +206,17 @@ class SECURITY:
 				domain = blob.read(record.DnsDomainNameLength).decode('utf-16-le')
 				
 				version = 2 if self.lsa_secret_key_vista_type is True else 1
-				secret = LSADCCSecret(version, domain, username, dcc_hash, iteration = self.dcc_iteration_count)
+				secret = LSADCCSecret(version, domain, username, dcc_hash, iteration = self.dcc_iteration_count, last_write_ts=record.LastWrite)
 				self.dcc_hashes.append(secret)
 				
 		return self.dcc_hashes	
 				
 	async def get_secrets(self):
 		logger.debug('[SECURITY] get_secrets')
-		await self.get_lsa_key()
+		if self.lsa_key is None:
+			await self.get_lsa_key()
 		
+
 		await self.dump_dcc()
 		
 		# Let's first see if there are cached entries
@@ -228,7 +232,12 @@ class SECURITY:
 			for vl in ['CurrVal', 'OldVal']:
 				key_path = 'Policy\\Secrets\\{}\\{}\\default'.format(key_name,vl)
 				logger.debug('[SECURITY] Parsing secrets in %s' % key_path)
-				v = await self.hive.get_value(key_path, False)
+				try:
+					v = await self.hive.get_value(key_path, False)
+				except Exception as e:
+					logger.debug('[SECURITY] Could not open %s, skipping!' % key_path)
+					continue
+				
 				if v and v[1] != 0:
 					logger.log(1, '[SECURITY] Key %s Value %s' % (key_path, v[1]))
 					if self.lsa_secret_key_vista_type is True:
@@ -253,6 +262,13 @@ class SECURITY:
 					
 				else:
 					logger.debug('[SECURITY] Could not open %s, skipping!' % key_path)
+		
+	def set_default_user(self, username, domain):
+		for secret in self.cached_secrets:
+			if isinstance(secret, LSASecretDefaultPassword):
+				secret.username = username
+				secret.domain = domain
+					
 	
 	def to_dict(self):
 		t = {}

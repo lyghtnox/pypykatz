@@ -17,10 +17,13 @@ class CryptoCMDHelper:
 		crypto_subparsers.dest = 'crypto_module'
 
 		group = crypto_subparsers.add_parser('nt', help='Generates NT hash of the password')
-		group.add_argument('password', help= 'Password to be hashed')	
+		group.add_argument('password', help= 'Password to be hashed')
 		
 		group = crypto_subparsers.add_parser('lm', help='Generates LM hash of the password')
 		group.add_argument('password', help= 'Password to be hashed')
+		
+		group = crypto_subparsers.add_parser('netntlmv2', help="Generates NTLMv2-SSP hash given parameters from network exchange.\nExpects a Responder-like input on stdin")
+		group.add_argument('password', help='password to be hashed')
 		
 		group = crypto_subparsers.add_parser('dcc', help='Generates DCC v1 (domain cached credentials version 1) hash of the password')
 		group.add_argument('username', help= 'username')
@@ -33,6 +36,12 @@ class CryptoCMDHelper:
 		
 		group = crypto_subparsers.add_parser('gppass', help='Decrypt GP passwords')
 		group.add_argument('enc', help='Encrypted password string')
+
+		group = crypto_subparsers.add_parser('ofscan', help='Decrypt TrendMicro OfficeScan config file')
+		group.add_argument('enc', help='Encrypted password string or path to ofcscan.ini file')
+		
+		group = crypto_subparsers.add_parser('vnc', help='Decrypt VNC password')
+		group.add_argument('enc', help='Encrypted password string')
 		
 	def execute(self, args):
 		if args.command in self.keywords:
@@ -42,15 +51,21 @@ class CryptoCMDHelper:
 			#self.run_live(args)
 			
 	def run(self, args):
-		from pypykatz.utils.crypto.winhash import NT, LM, MSDCC, MSDCCv2
+		from pypykatz.utils.crypto.winhash import NT, LM, MSDCC, MSDCCv2, NETNTLMV2
 		from pypykatz.utils.crypto.gppassword import gppassword
+		from pypykatz.utils.crypto.ofcdecrypt import ofscan_decrypt_data
+		from pypykatz.utils.crypto.others import vncdecrypt
 
 		if args.crypto_module == 'nt':
 			print(NT(args.password).hex())
 		
 		elif args.crypto_module == 'lm':
 			print(LM(args.password).hex())
-			
+		
+		elif args.crypto_module == 'netntlmv2':
+			(username, _, domain, challenge, _, blob )=input().split(':')
+			print(NETNTLMV2(username, args.password, domain, challenge, blob).hex())
+		
 		elif args.crypto_module == 'dcc':
 			print(MSDCC(args.username, args.password).hex())
 			
@@ -60,3 +75,9 @@ class CryptoCMDHelper:
 		elif args.crypto_module == 'gppass':
 			print(gppassword(args.enc))
 		
+		elif args.crypto_module == 'ofscan':
+			for param, res in ofscan_decrypt_data(args.enc):
+				print('%s: %s' % (param, res))
+		
+		elif args.crypto_module == 'vnc':
+			print(vncdecrypt(args.enc))

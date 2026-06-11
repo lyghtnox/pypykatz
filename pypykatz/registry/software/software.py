@@ -49,6 +49,13 @@ class SOFTWARE:
 					self.default_logon_password = data.decode('utf-16-le')
 				else:
 					self.default_logon_password = data
+		
+		if isinstance(self.default_logon_password, str):
+			self.default_logon_password = self.default_logon_password.replace('\x00', '')
+		if isinstance(self.default_logon_user, str):
+			self.default_logon_user = self.default_logon_user.replace('\x00', '')
+		if isinstance(self.default_logon_domain, str):
+			self.default_logon_domain = self.default_logon_domain.replace('\x00', '')
 				
 		return self.default_logon_user
 		
@@ -62,4 +69,6 @@ class SOFTWARE:
 	def __str__(self):
 		t  = '============== SOFTWARE hive secrets ==============\r\n'
 		t += 'default_logon_user: %s\r\n' % self.default_logon_user
+		t += 'default_logon_domain: %s\r\n' % self.default_logon_domain
+		t += 'default_logon_password: %s\r\n' % self.default_logon_password
 		return t

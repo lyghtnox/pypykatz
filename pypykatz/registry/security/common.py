@@ -46,7 +46,7 @@ class LSASecret:
 			lss.process_secret()
 			
 		elif kn.startswith('$MACHINE.ACC'):
-			lss = LSASecretMachineAccount(kn, raw_secret, history)
+			lss = LSASecretMachineAccount(kn, raw_secret, history, username=system_hive.machinename)
 			lss.process_secret()
 		
 		else:
@@ -109,6 +109,7 @@ class LSASecretDefaultPassword(LSASecret):
 	def process_secret(self):
 		try:
 			self.secret = self.raw_secret.decode('utf-16-le')
+			self.secret = self.secret.replace('\x00', '')
 		except:
 			pass
 		else:
@@ -153,12 +154,13 @@ class LSASecretASPNET(LSASecret):
 		return t
 
 class LSASecretMachineAccount(LSASecret):
-	def __init__(self, key_name, raw_secret, history):
+	def __init__(self, key_name, raw_secret, history, username = None):
 		LSASecret.__init__(self, key_name, raw_secret, history)
-		self.username = None
+		self.username = username
 		self.secret = None
 		self.kerberos_password = None
-	
+		self.raw_secret = raw_secret
+		
 	def process_secret(self):
 		#only the NT hash is calculated here
 		ctx = MD4(self.raw_secret)#hashlib.new('md4')
@@ -179,7 +181,7 @@ class LSASecretMachineAccount(LSASecret):
 		return t
 		
 	def __str__(self):
-		return '=== LSA Machine account password ===\r\nHistory: %s\r\nNT: %s\r\nPassword(hex): %s\r\nKerberos password(hex): %s' % (self.history, self.secret.hex(), self.raw_secret.hex(), self.kerberos_password.hex())
+		return '=== LSA Machine account password ===\r\nHistory: %s\r\nUsername: %s\r\nNT: %s\r\nPassword(hex): %s\r\nKerberos password(hex): %s' % (self.history, self.username, self.secret.hex(), self.raw_secret.hex(), self.kerberos_password.hex())
 	
 		
 class LSASecretDPAPI(LSASecret):
@@ -206,12 +208,13 @@ class LSASecretDPAPI(LSASecret):
 		return '=== LSA DPAPI secret ===\r\nHistory: %s\r\nMachine key (hex): %s\r\nUser key(hex): %s' % (self.history, self.machine_key.hex(), self.user_key.hex())
 
 class LSADCCSecret:
-	def __init__(self, version, domain, username, hash_value, iteration = None):
+	def __init__(self, version, domain, username, hash_value, iteration = 10240, last_write_ts = None):
 		self.version = version
 		self.domain = domain
 		self.username = username
 		self.iteration = iteration
 		self.hash_value = hash_value
+		self.last_write_ts = last_write_ts
 		
 	def to_dict(self):
 		t = {}
@@ -220,7 +223,13 @@ class LSADCCSecret:
 		t['username'] = self.username
 		t['iteration'] = self.iteration
 		t['hash_value'] = self.hash_value
+		t['lastwrite'] = self.get_lastwrite()
 		return t
+	
+	def get_lastwrite(self, default = None):
+		if self.last_write_ts is None:
+			return default
+		return self.last_write_ts.strftime("%Y-%m-%d %H:%M:%S")
 		
 	def __str__(self):
 		return self.to_lopth()
@@ -229,4 +238,4 @@ class LSADCCSecret:
 		if self.version == 1:
 			return "%s/%s:%s:%s" % (self.domain, self.username, self.hash_value.hex(), self.username)
 		else:
-			return "%s/%s:$DCC2$%s#%s#%s" % (self.domain, self.username, self.iteration, self.username, self.hash_value.hex())
+			return "%s/%s:*%s*$DCC2$%s#%s#%s" % (self.domain, self.username, self.get_lastwrite(''), self.iteration, self.username, self.hash_value.hex())

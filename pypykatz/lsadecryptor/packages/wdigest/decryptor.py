@@ -8,6 +8,7 @@ import json
 
 from pypykatz.lsadecryptor.package_commons import PackageDecryptor
 from pypykatz.commons.win_datatypes import LSA_UNICODE_STRING
+from pypykatz.commons.common import hexdump
 
 class WdigestCredential:
 	def __init__(self):
@@ -45,9 +46,14 @@ class WdigestDecryptor(PackageDecryptor):
 		self.credentials = []
 
 	def find_first_entry(self):
+		self.log('Scanning for Wdigest structs! %s' % self.decryptor_template.signature.hex())
 		position = self.find_signature('wdigest.dll',self.decryptor_template.signature)
+		self.log('Signature @ %s' % hex(position))
+		self.log('Signature (corrected) @ %s' % hex(position + self.decryptor_template.first_entry_offset))
 		ptr_entry_loc = self.reader.get_ptr_with_offset(position + self.decryptor_template.first_entry_offset)
+		self.log('First entry ptr @ %s' % hex(ptr_entry_loc))
 		ptr_entry = self.reader.get_ptr(ptr_entry_loc)
+		self.log('First entry -> %s' % hex(ptr_entry))
 		return ptr_entry, ptr_entry_loc
 		
 	def add_entry(self, wdigest_entry):
@@ -67,6 +73,7 @@ class WdigestDecryptor(PackageDecryptor):
 		wc.username = UserName.read_string(self.reader)
 		wc.domainname = DomainName.read_string(self.reader)
 		wc.encrypted_password = Password.read_maxdata(self.reader)
+
 		if wc.username.endswith('$') is True:
 			wc.password, wc.password_raw = self.decrypt_password(wc.encrypted_password, bytes_expected=True)
 			if wc.password is not None:

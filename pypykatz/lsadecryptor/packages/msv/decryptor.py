@@ -121,6 +121,7 @@ class LogonSession:
 		lsc.session_id = entry.Session
 		lsc.username = entry.UserName.read_string(reader)
 		lsc.domainname = entry.Domaine.read_string(reader)
+		
 		lsc.logon_server = entry.LogonServer.read_string(reader)
 		if entry.LogonTime != 0:
 			lsc.logon_time = filetime_to_dt(entry.LogonTime).isoformat()
@@ -146,6 +147,7 @@ class LogonSession:
 		t['kerberos_creds']  = []
 		t['credman_creds']  = []
 		t['tspkg_creds']  = []
+		t['cloudap_creds'] = []
 		for cred in self.msv_creds:
 			t['msv_creds'].append(cred.to_dict())
 		for cred in self.wdigest_creds:
@@ -162,6 +164,8 @@ class LogonSession:
 			t['credman_creds'].append(cred.to_dict())
 		for cred in self.tspkg_creds:
 			t['tspkg_creds'].append(cred.to_dict())
+		for cred in self.cloudap_creds:
+			t['cloudap_creds'].append(cred.to_dict())
 		return t
 		
 	def to_json(self):
@@ -204,6 +208,9 @@ class LogonSession:
 		if len(self.dpapi_creds) > 0:
 			for cred in self.dpapi_creds:
 				t+= str(cred)
+		if len(self.cloudap_creds) > 0:
+			for cred in self.cloudap_creds:
+				t+= str(cred)
 		return t
 
 	def to_row(self):
@@ -234,6 +241,11 @@ class LogonSession:
 		for cred in self.tspkg_creds:
 			t = cred.to_dict()
 			yield [self.luid, t['credtype'], self.session_id, self.sid, t['credtype'], '', self.domainname, self.username, 'plaintext', t['password']]
+		for cred in self.cloudap_creds:
+			t = cred.to_dict()
+			yield [self.luid, t['credtype'], self.session_id, self.sid, t['credtype'], '', self.domainname, self.username, 'masterkey', str(cred.get_masterkey_hex())]
+			yield [self.luid, t['credtype'], self.session_id, self.sid, t['credtype'], '', self.domainname, self.username, 'sha1', str(t['dpapi_key_sha1'])]
+			yield [self.luid, t['credtype'], self.session_id, self.sid, t['credtype'], '', self.domainname, self.username, 'PRT', str(t['PRT'])]
 
 	def to_grep_rows(self):
 		for cred in self.msv_creds:
@@ -273,8 +285,7 @@ class LogonSession:
 		
 		for cred in self.cloudap_creds:
 			t = cred.to_dict()
-			#print(t)
-			yield [str(t['credtype']), '', '', '', '', '', str(t['dpapi_key']), str(t['dpapi_key_sha1']), str(t['key_guid']), base64.b64encode(str(t['PRT']).encode()).decode()]
+			yield [str(t['credtype']), '', '', '', '', '', str(cred.get_masterkey_hex()), str(t['dpapi_key_sha1']), str(t['key_guid']), str(t['PRT'])]
 
 
 
@@ -297,27 +308,45 @@ class MsvDecryptor(PackageDecryptor):
 		#input('sig %s' % self.decryptor_template.signature.hex())
 		#input('sig %s' % self.decryptor_template.first_entry_offset)
 		position = self.find_signature('lsasrv.dll',self.decryptor_template.signature)
+		self.log('Signature position @ %s' % hex(position))
 
 		#getting logon session count
 		self.logon_session_count = 1
 		if self.sysinfo.architecture == KatzSystemArchitecture.X64:
 			if self.sysinfo.buildnumber >= WindowsBuild.WIN_8.value or (WindowsMinBuild.WIN_8.value <= self.sysinfo.buildnumber < WindowsMinBuild.WIN_BLUE.value and self.sysinfo.msv_dll_timestamp > 0x60000000):
+				self.log('Logon session count PTR @ %s' % hex(position + self.decryptor_template.offset2))
 				ptr_entry_loc = self.reader.get_ptr_with_offset(position + self.decryptor_template.offset2)
+				self.log('Logon session count PTR -> %s' % hex(ptr_entry_loc))
 				self.reader.move(ptr_entry_loc)
 				self.logon_session_count = int.from_bytes(self.reader.read(1), byteorder = 'big', signed = False)
+				self.log('Logon session count: %s' % self.logon_session_count)
 
 		#getting logon session ptr
-		ptr_entry_loc = self.reader.get_ptr_with_offset(position + self.decryptor_template.first_entry_offset)
-		ptr_entry = self.reader.get_ptr(ptr_entry_loc)
+		self.log('Logon session PTR @ %s' % hex(position + self.decryptor_template.first_entry_offset))
+		additional_offset = 0
+		if self.decryptor_template.first_entry_offset_correction != 0:
+			self.log('This template uses offset correction!')
+			offsetpos = position + self.decryptor_template.first_entry_offset_correction
+			self.log('Fetching additional offset from %s' % hex(offsetpos))
+			self.reader.move(offsetpos)
+			additional_offset = int.from_bytes(self.reader.read(4), byteorder = 'little', signed = False)
+			self.log('Additional offset value: %s' % hex(additional_offset))
+			
+		ptr_entry_loc = self.reader.get_ptr_with_offset(position + self.decryptor_template.first_entry_offset) + additional_offset		
+		self.log('Logon session PTR -> %s' % hex(ptr_entry_loc))
+		ptr_entry = self.reader.get_ptr(ptr_entry_loc) 
+		self.log('Logon session @ %s' % hex(ptr_entry))
 		return ptr_entry, ptr_entry_loc
 
 	
 	def add_entry(self, entry):
 		self.current_logonsession = LogonSession.parse(entry, self.reader)
+
 		if entry.CredentialManager.value != 0:
 			self.parse_credman_credentials(entry)
 		
-		if entry.Credentials_list_ptr.value != 0:			
+		if entry.Credentials_list_ptr.value != 0:
+			self.log_ptr(entry.Credentials_list_ptr.value, 'KIWI_MSV1_0_CREDENTIALS_LIST')
 			self.walk_list(entry.Credentials_list_ptr, self.add_credentials)
 		else:
 			self.log('No credentials in this structure!')
@@ -325,6 +354,9 @@ class MsvDecryptor(PackageDecryptor):
 		self.logon_sessions[self.current_logonsession.luid] = self.current_logonsession
 		
 	def add_credentials(self, primary_credentials_list_entry):
+		#print('PrimaryCredentials_ptr %s' % primary_credentials_list_entry.PrimaryCredentials_ptr.value)
+		self.reader.move(primary_credentials_list_entry.PrimaryCredentials_ptr.value)
+		#print('PrimaryCredentials_ptr %s' % primary_credentials_list_entry.PrimaryCredentials_ptr)
 		self.walk_list(
 			primary_credentials_list_entry.PrimaryCredentials_ptr, 
 			self.add_primary_credentials
@@ -335,11 +367,11 @@ class MsvDecryptor(PackageDecryptor):
 		credman_set_list_entry = logon_session.CredentialManager.read(self.reader, override_finaltype = KIWI_CREDMAN_SET_LIST_ENTRY)
 		self.log_ptr(credman_set_list_entry.list1.value, 'KIWI_CREDMAN_LIST_STARTER')
 		list_starter = credman_set_list_entry.list1.read(self.reader, override_finaltype = KIWI_CREDMAN_LIST_STARTER)
+		self.log_ptr(list_starter.start.value, 'KIWI_CREDMAN_LIST_ENTRY')
 		if list_starter.start.value != list_starter.start.location:
 			self.walk_list(list_starter.start, self.add_credman_credential, override_ptr = self.credman_decryptor_template.list_entry)
 		
 	def add_credman_credential(self, credman_credential_entry):
-		
 		c = CredmanCredential()
 		c.username = credman_credential_entry.user.read_string(self.reader)
 		c.domainname = credman_credential_entry.server2.read_string(self.reader)
@@ -361,6 +393,9 @@ class MsvDecryptor(PackageDecryptor):
 		old_pos = self.reader.tell()
 
 		msv1_0_module = self.reader.reader.get_module_by_name("msv1_0.dll")
+		if msv1_0_module is None:
+			self.reader.move(old_pos)
+			return 0
 
 		try:
 			position = self.find_signature('msv1_0.dll', b'\xe0zRE}*\xecL\xb2\x14s\x9fAY\xc3\x92')
@@ -446,6 +481,7 @@ class MsvDecryptor(PackageDecryptor):
 				self.reader.read_int() #does nothing just moves the position
 				#self.log('moving to other logon session')
 
+			self.log_ptr(entry_ptr_loc, 'PKIWI_MSV1_0_LIST')
 			entry_ptr = self.decryptor_template.list_entry(self.reader)
 			
 			if entry_ptr.location == entry_ptr.value:

@@ -3,13 +3,15 @@
 # Author:
 #  Tamas Jos (@skelsec)
 #
-import io
 from pypykatz import logger
+
 from minidump.win_datatypes import BOOLEAN, HANDLE
 from pypykatz.commons.common import KatzSystemArchitecture, WindowsMinBuild, WindowsBuild
 from pypykatz.commons.win_datatypes import USHORT, ULONG, LSA_UNICODE_STRING, LSAISO_DATA_BLOB, \
 	BYTE, PVOID, WORD, DWORD, POINTER, LUID, PSID, ANSI_STRING
 from pypykatz.lsadecryptor.package_commons import PackageTemplate
+
+from pypykatz.commons.common import hexdump
 
 class MsvTemplate(PackageTemplate):
 	def __init__(self):
@@ -17,6 +19,7 @@ class MsvTemplate(PackageTemplate):
 		
 		self.signature = None
 		self.first_entry_offset = None
+		self.first_entry_offset_correction = 0
 		self.offset2 = None
 		
 		self.list_entry = None
@@ -51,15 +54,23 @@ class MsvTemplate(PackageTemplate):
 				template.list_entry = PKIWI_MSV1_0_LIST_61	
 		
 		elif sysinfo.buildnumber < WindowsMinBuild.WIN_BLUE.value:
-			#template.list_entry = PKIWI_MSV1_0_LIST_62
 			if sysinfo.msv_dll_timestamp >  0x53480000:
 				template.list_entry = PKIWI_MSV1_0_LIST_63
 			else:
 				template.list_entry = PKIWI_MSV1_0_LIST_62
 		
-		else:
+		elif sysinfo.buildnumber < WindowsBuild.WIN_11_24H2.value:
 			template.list_entry = PKIWI_MSV1_0_LIST_63
 		
+		elif sysinfo.buildnumber < WindowsBuild.WIN_11_25H2.value:
+			if sysinfo.msv_dll_timestamp >= 0xd133958f:
+				template.list_entry = PKIWI_MSV1_0_LIST_65
+			else:
+				template.list_entry = PKIWI_MSV1_0_LIST_64
+
+		else:
+			template.list_entry = PKIWI_MSV1_0_LIST_65
+
 		template.log_template('list_entry', template.list_entry)
 		if sysinfo.buildnumber < WindowsBuild.WIN_10_1507.value:
 			template.decrypted_credential_struct = MSV1_0_PRIMARY_CREDENTIAL_DEC
@@ -67,8 +78,10 @@ class MsvTemplate(PackageTemplate):
 			template.decrypted_credential_struct = MSV1_0_PRIMARY_CREDENTIAL_10_OLD_DEC
 		elif sysinfo.buildnumber < WindowsBuild.WIN_10_1607.value:
 			template.decrypted_credential_struct = MSV1_0_PRIMARY_CREDENTIAL_10_DEC
-		else:
+		elif sysinfo.buildnumber < WindowsBuild.WIN_11_24H2.value:
 			template.decrypted_credential_struct = MSV1_0_PRIMARY_CREDENTIAL_10_1607_DEC
+		else:
+			template.decrypted_credential_struct = MSV1_0_PRIMARY_CREDENTIAL_11_H24_DEC
 		
 		template.log_template('decrypted_credential_struct', template.decrypted_credential_struct)
 			
@@ -132,15 +145,22 @@ class MsvTemplate(PackageTemplate):
 				template.signature = b'\x33\xff\x41\x89\x37\x4c\x8b\xf3\x45\x85\xc0\x74'
 				template.first_entry_offset = 23
 				template.offset2 = -4
-				
-			else:
-				#win11
+
+			elif WindowsBuild.WIN_11_2022.value <= sysinfo.buildnumber < WindowsBuild.WIN_11_2023.value: #20348
 				template.signature = b'\x45\x89\x34\x24\x4c\x8b\xff\x8b\xf3\x45\x85\xc0\x74'
 				template.first_entry_offset = 24
 				template.offset2 = -4
 
-			#BYTE PTRN_WN11_LogonSessionList[]       = {};
-			#logger.debug(template.signature.hex())
+			elif WindowsBuild.WIN_11_2023.value <= sysinfo.buildnumber < WindowsBuild.WIN_11_24H2.value:
+				template.signature = b'\x45\x89\x37\x4c\x8b\xf7\x8b\xf3\x45\x85\xc0\x0f'
+				template.first_entry_offset = 27
+				template.offset2 = -4
+			
+			else:
+				template.signature = b'\x45\x89\x34\x24\x8b\xfb\x45\x85\xc0\x0f'
+				template.first_entry_offset = 25
+				template.offset2 = -16
+				template.first_entry_offset_correction = 34
 		
 		elif sysinfo.architecture == KatzSystemArchitecture.X86:
 			if WindowsMinBuild.WIN_XP.value <= sysinfo.buildnumber < WindowsMinBuild.WIN_2K3.value:
@@ -261,6 +281,30 @@ class MSV1_0_PRIMARY_CREDENTIAL_10_1607_DEC:
 		self.align1 = BYTE(reader).value
 		self.align2 = BYTE(reader).value
 		self.credKeyType = DWORD(reader).value
+		self.isoSize = WORD(reader).value
+		self.DPAPIProtected = reader.read(20)
+
+		if bool(self.isIso[0]):
+			self.encryptedBlob = reader.read(self.isoSize)
+		else:
+			self.NtOwfPassword = reader.read(16)
+			self.LmOwfPassword = reader.read(16)
+			self.ShaOwPassword = reader.read(20)
+
+class MSV1_0_PRIMARY_CREDENTIAL_11_H24_DEC:
+	def __init__(self, reader):
+		self.LogonDomainName =  LSA_UNICODE_STRING(reader)
+		self.UserName = LSA_UNICODE_STRING(reader)
+		self.pNtlmCredIsoInProc = PVOID(reader).value
+		self.isIso = BOOLEAN(reader).value
+		self.isNtOwfPassword = BOOLEAN(reader).value
+		self.isLmOwfPassword = BOOLEAN(reader).value
+		self.isShaOwPassword = BOOLEAN(reader).value
+		self.isDPAPIProtected = BOOLEAN(reader).value
+		self.align0 = BYTE(reader).value
+		self.align1 = BYTE(reader).value
+		self.align2 = BYTE(reader).value
+		#self.credKeyType = DWORD(reader).value
 		self.isoSize = WORD(reader).value
 		self.DPAPIProtected = reader.read(20)
 
@@ -558,7 +602,7 @@ class KIWI_MSV1_0_LIST_62:
 class PKIWI_MSV1_0_LIST_63(POINTER):
 	def __init__(self, reader):
 		super().__init__(reader, KIWI_MSV1_0_LIST_63)
-		
+
 class KIWI_MSV1_0_LIST_63:
 	def __init__(self, reader):
 		self.Flink = PKIWI_MSV1_0_LIST_63(reader)
@@ -607,14 +651,127 @@ class KIWI_MSV1_0_LIST_63:
 		self.unk25 = ULONG(reader).value
 		self.unk26 = ULONG(reader).value
 		reader.align()
-		#input('CredentialManager\n' + hexdump(reader.peek(0x100)))
 		self.unk27 = PVOID(reader).value
 		self.unk28 = PVOID(reader).value
 		self.unk29 = PVOID(reader).value
 		self.CredentialManager = PVOID(reader)
 
+class PKIWI_MSV1_0_LIST_64(POINTER):
+	def __init__(self, reader):
+		super().__init__(reader, KIWI_MSV1_0_LIST_64)
 
+class KIWI_MSV1_0_LIST_64:
+	def __init__(self, reader):
+		self.Flink = PKIWI_MSV1_0_LIST_64(reader)
+		self.Blink = PKIWI_MSV1_0_LIST_64(reader)
+		self.unk0 = PVOID(reader).value
+		self.unk1 = ULONG(reader).value
+		reader.align()
+		self.unk2 = PVOID(reader).value
+		self.unk3 = ULONG(reader).value
+		self.unk4 = ULONG(reader).value
+		self.unk5 = ULONG(reader).value
+		reader.align()
+		self.hSemaphore6 = HANDLE(reader).value
+		self.unk7 = PVOID(reader).value
+		self.hSemaphore8 = HANDLE(reader).value
+		self.unk9 = PVOID(reader).value
+		self.unk10 = PVOID(reader).value
+		self.unk11 = ULONG(reader).value
+		self.unk12 = ULONG(reader).value
+		self.unk13 = PVOID(reader).value
+		reader.align()
+		self.LocallyUniqueIdentifier = LUID(reader).value
+		self.SecondaryLocallyUniqueIdentifier = LUID(reader).value
+		self.waza = reader.read(12)
+		reader.align()
+		self.unk14 = PVOID(reader).value
+		self.UserName = LSA_UNICODE_STRING(reader)
+		self.Domaine = LSA_UNICODE_STRING(reader)
+		self.unk15 = PVOID(reader).value
+		self.unk16 = PVOID(reader).value
+		self.Type = LSA_UNICODE_STRING(reader)
+		self.pSid = PSID(reader)
+		self.LogonType = ULONG(reader).value
+		reader.align()
+		self.unk17 = PVOID(reader).value
+		self.Session = ULONG(reader).value
+		reader.align(8)
+		self.LogonTime =  int.from_bytes(reader.read(8), byteorder = 'little', signed = False) #autoalign x86
+		self.LogonServer = LSA_UNICODE_STRING(reader)
+		self.Credentials_list_ptr = PKIWI_MSV1_0_CREDENTIAL_LIST(reader)
+		self.unk18 = PVOID(reader).value
+		self.unk19 = PVOID(reader).value
+		self.unk20 = PVOID(reader).value
+		self.unk21 = ULONG(reader).value
+		self.unk22 = ULONG(reader).value
+		self.unk23 = ULONG(reader).value
+		self.unk24 = ULONG(reader).value
+		self.unk25 = ULONG(reader).value
+		reader.align()
+		self.unk26 = PVOID(reader).value
+		self.unk27 = PVOID(reader).value
+		self.unk28 = PVOID(reader).value
+		self.CredentialManager = PVOID(reader)
 
+class PKIWI_MSV1_0_LIST_65(POINTER):
+	def __init__(self, reader):
+		super().__init__(reader, KIWI_MSV1_0_LIST_65)
+
+class KIWI_MSV1_0_LIST_65:
+	def __init__(self, reader):
+		self.Flink = PKIWI_MSV1_0_LIST_65(reader)
+		self.Blink = PKIWI_MSV1_0_LIST_65(reader)
+		self.unk0 = PVOID(reader).value
+		self.unk1 = ULONG(reader).value
+		reader.align()
+		self.unk2 = PVOID(reader).value
+		self.unk3 = ULONG(reader).value
+		self.unk4 = ULONG(reader).value
+		self.unk5 = ULONG(reader).value
+		reader.align()
+		self.hSemaphore6 = HANDLE(reader).value
+		self.unk7 = PVOID(reader).value
+		self.hSemaphore8 = HANDLE(reader).value
+		self.unk9 = PVOID(reader).value
+		self.unk10 = PVOID(reader).value
+		self.unk11 = ULONG(reader).value
+		self.unk12 = ULONG(reader).value
+		self.unk13 = PVOID(reader).value
+		reader.align()
+		self.LocallyUniqueIdentifier = LUID(reader).value
+		self.SecondaryLocallyUniqueIdentifier = LUID(reader).value
+		self.waza = reader.read(12)
+		reader.align()
+		self.unk14 = PVOID(reader).value
+		self.unk15 = PVOID(reader).value
+		self.UserName = LSA_UNICODE_STRING(reader)
+		self.Domaine = LSA_UNICODE_STRING(reader)
+		self.unk16 = PVOID(reader).value
+		self.unk17 = PVOID(reader).value
+		self.Type = LSA_UNICODE_STRING(reader)
+		self.pSid = PSID(reader)
+		self.LogonType = ULONG(reader).value
+		reader.align()
+		self.unk18 = PVOID(reader).value
+		self.Session = ULONG(reader).value
+		reader.align(8)
+		self.LogonTime =  int.from_bytes(reader.read(8), byteorder = 'little', signed = False) #autoalign x86
+		self.LogonServer = LSA_UNICODE_STRING(reader)
+		self.Credentials_list_ptr = PKIWI_MSV1_0_CREDENTIAL_LIST(reader)
+		self.unk19 = PVOID(reader).value
+		self.unk20 = PVOID(reader).value
+		self.unk21 = PVOID(reader).value
+		self.unk22 = ULONG(reader).value
+		self.unk23 = ULONG(reader).value
+		self.unk24 = ULONG(reader).value
+		self.unk25 = ULONG(reader).value
+		self.unk26 = ULONG(reader).value
+		reader.align()
+		self.unk27 = PVOID(reader).value
+		self.unk28 = PVOID(reader).value
+		self.unk29 = PVOID(reader).value
+		self.CredentialManager = PVOID(reader)
 
 
 

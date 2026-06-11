@@ -22,6 +22,7 @@ from pypykatz import logger
 from pypykatz.commons.common import UniversalEncoder
 from minidump.aminidumpfile import AMinidumpFile
 from minikerberos.common.ccache import CCACHE
+from minikerberos.common.kirbi import Kirbi
 from pypykatz._version import __version__
 
 class apypykatz:
@@ -240,12 +241,13 @@ class apypykatz:
 	
 	async def get_kerberos(self, with_tickets = True):
 		dec_template = KerberosTemplate.get_template(self.sysinfo)
-		dec = KerberosDecryptor(self.reader, dec_template, self.lsa_decryptor, self.sysinfo)
+		with_tickets = False # Turning it off as it's not working for some reason
+		dec = KerberosDecryptor(self.reader, dec_template, self.lsa_decryptor, self.sysinfo, with_tickets = with_tickets)
 		await dec.start()
 		for cred in dec.credentials:
 			for ticket in cred.tickets:
 				for fn in ticket.kirbi_data:
-					self.kerberos_ccache.add_kirbi(ticket.kirbi_data[fn].native)
+					self.kerberos_ccache.add_kirbi(Kirbi(ticket.kirbi_data[fn]))
 			
 			if cred.luid in self.logon_sessions:
 				self.logon_sessions[cred.luid].kerberos_creds.append(cred)

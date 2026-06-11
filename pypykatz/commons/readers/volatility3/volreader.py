@@ -54,8 +54,9 @@ class VOL3Sysinfo:
 		self.major_version = 6
 
 class Vol3Reader:
-	def __init__(self, vol_obj):
+	def __init__(self, vol_obj, framework_version):
 		self.vol_obj = vol_obj
+		self.framework_version = framework_version
 		self.proc_layer_name = None
 		self.proc_layer = None
 		self.lsass_process = None
@@ -82,13 +83,30 @@ class Vol3Reader:
 		return sysinfo
 
 	def find_lsass(self):
+		if self.framework_version != 1 and self.framework_version != 2:
+			raise Exception('Unsupported Volatility Framework Version')
+
 		filter_func = pslist.PsList.create_name_filter(['lsass.exe'])
-		for proc in pslist.PsList.list_processes(
+
+		if self.framework_version == 1:
+			layer_name = self.vol_obj.config['primary']
+			symbol_table = self.vol_obj.config['nt_symbols']
+
+			proc_list = pslist.PsList.list_processes(
 					context = self.vol_obj.context,
-					layer_name = self.vol_obj.config['primary'],
-					symbol_table = self.vol_obj.config['nt_symbols'],
-					filter_func = filter_func
-				):
+					layer_name=layer_name,
+					symbol_table=symbol_table,
+					filter_func=filter_func
+				)
+
+		elif self.framework_version == 2:
+			proc_list = pslist.PsList.list_processes(
+				context=self.vol_obj.context,
+				kernel_module_name=self.vol_obj.config['kernel'],
+				filter_func=filter_func
+			)
+		
+		for proc in proc_list:
 			self.lsass_process = proc
 			self.proc_layer_name = self.lsass_process.add_process_layer()
 			self.proc_layer = self.vol_obj.context.layers[self.proc_layer_name]
@@ -112,8 +130,14 @@ class Vol3Reader:
 
 	def get_buildnumber(self):
 		# https://github.com/volatilityfoundation/volatility3/blob/ee31ece0062ce762ed38f6d0a1c54e9f1cd37970/volatility/framework/plugins/windows/cmdline.py
+		if self.framework_version == 1:
+			vol_object = self.vol_obj.config["nt_symbols"] + constants.BANG + "_PEB"
+		elif self.framework_version == 2:
+			vol_object = self.vol_obj.context.modules[self.vol_obj.config['kernel']].symbol_table_name + constants.BANG + "_PEB"
+		else:
+			raise Exception('Unsupported Volatility Framework Version')
 		peb = self.vol_obj.context.object(
-		    self.vol_obj.config["nt_symbols"] + constants.BANG + "_PEB",
+		    vol_object,
 		    layer_name = self.proc_layer_name,
 		    offset = self.lsass_process.Peb
 		)
@@ -126,9 +150,16 @@ class Vol3Reader:
 			self.sections.append(VOL3Section.from_vad(vad))
 
 	def get_arch(self):
-		if not symbols.symbol_table_is_64bit(self.vol_obj.context, self.vol_obj.config["nt_symbols"]):
+		if self.framework_version == 1:
+			symbol_table_is_64bit = symbols.symbol_table_is_64bit(self.vol_obj.context, self.vol_obj.config["nt_symbols"])
+		elif self.framework_version == 2:
+			symbol_table_is_64bit = symbols.symbol_table_is_64bit(self.vol_obj.context, self.vol_obj.context.modules[self.vol_obj.config['kernel']].symbol_table_name)
+		else:
+			raise Exception('Unsupported Volatility Framework Version')
+		if not symbol_table_is_64bit:
 			self.processor_architecture = KatzSystemArchitecture.X86
-		self.processor_architecture = KatzSystemArchitecture.X64
+		else:
+			self.processor_architecture = KatzSystemArchitecture.X64
 
 	def align(self, alignment = None):
 		"""
@@ -228,6 +259,7 @@ def vol3_generator(mimi):
 			t = cred.to_dict()
 			x = [str(t['credtype']), '', '', '', '', '', str(t['masterkey']), str(t['sha1_masterkey']), str(t['key_guid']), '']
 			yield 0, x
+
 
 def vol3_treegrid(mimi):
 	return renderers.TreeGrid([

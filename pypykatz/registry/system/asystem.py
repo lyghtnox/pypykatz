@@ -22,6 +22,7 @@ class SYSTEM:
 		self.hive = system_hive
 		self.currentcontrol = None
 		self.bootkey = None
+		self.machinename = None
 		
 	async def get_currentcontrol(self):
 		logger.debug('[SYSTEM] determining current control set')
@@ -56,7 +57,9 @@ class SYSTEM:
 		
 	async def get_secrets(self):
 		await self.get_currentcontrol()
+		await self.get_machine_name()
 		await self.get_bootkey()
+		
 	
 	async def get_service_user(self, service_name):
 		if self.currentcontrol is None:
@@ -65,8 +68,32 @@ class SYSTEM:
 		try:
 			key = '%s\\Services\\%s\\ObjectName' % (self.currentcontrol, service_name)
 			val = await self.hive.get_value(key)
-			return val[1].decode('utf-16-le')
+			val = val[1].decode('utf-16-le')
+			val = val.replace('\x00', '')
+			return val
 		except:
+			return None
+	
+	async def get_machine_name(self):
+		if self.currentcontrol is None:
+			await self.get_currentcontrol()
+		
+		try:
+			if self.machinename is not None:
+				return self.machinename
+			
+			#key = '%s\\Control\\ComputerName\\ActiveComputerName\\ComputerName' % self.currentcontrol
+			key = '%s\\Control\\ComputerName\\ComputerName\\ComputerName' % self.currentcontrol
+			val = await self.hive.get_value(key)
+			if isinstance(val[1], bytes):
+				self.machinename = val[1].decode('utf-16-le')
+			else:
+				self.machinename = val[1]
+			if self.machinename is not None:
+				self.machinename = self.machinename.replace('\x00', '')
+			return self.machinename
+		except Exception as e:
+			print('[SYSTEM] get_machine_name error: %s' % e)
 			return None
 		
 	def to_dict(self):

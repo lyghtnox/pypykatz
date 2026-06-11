@@ -22,6 +22,7 @@ from pypykatz import logger
 from pypykatz.commons.common import UniversalEncoder
 from minidump.minidumpfile import MinidumpFile
 from minikerberos.common.ccache import CCACHE
+from minikerberos.common.kirbi import Kirbi
 from pypykatz._version import __version__
 
 class pypykatz:
@@ -131,6 +132,15 @@ class pypykatz:
 		mimi = pypykatz(reader.get_buffered_reader(), sysinfo)
 		mimi.start(packages)
 		return mimi
+	
+	@staticmethod
+	def parse_zipdump_file(filename, packages = ['all']):
+		from pypykatz.commons.readers.zipdump.reader import ZipDumpReader
+		reader = ZipDumpReader.from_file(filename)
+		sysinfo = KatzSystemInfo.from_live_reader(reader)
+		mimi = pypykatz(reader.get_buffered_reader(), sysinfo)
+		mimi.start(packages)
+		return mimi
 		
 	@staticmethod
 	def parse_minidump_file(filename, packages = ['all'], chunksize = 10*1024):
@@ -212,9 +222,9 @@ class pypykatz:
 		return mimi
 
 	@staticmethod
-	def go_volatility3(vol3_obj, packages = ['all']):
+	def go_volatility3(vol3_obj, framework_version = 2, packages = ['all']):
 		from pypykatz.commons.readers.volatility3.volreader import Vol3Reader, vol3_treegrid
-		reader = Vol3Reader(vol3_obj)
+		reader = Vol3Reader(vol3_obj, framework_version)
 		sysinfo = reader.get_sysinfo()
 		mimi = pypykatz(reader, sysinfo)
 		mimi.start(packages)
@@ -325,7 +335,7 @@ class pypykatz:
 		for cred in dec.credentials:
 			for ticket in cred.tickets:
 				for fn in ticket.kirbi_data:
-					self.kerberos_ccache.add_kirbi(ticket.kirbi_data[fn].native)
+					self.kerberos_ccache.add_kirbi(Kirbi(ticket.kirbi_data[fn]))
 			
 			if cred.luid in self.logon_sessions:
 				self.logon_sessions[cred.luid].kerberos_creds.append(cred)
